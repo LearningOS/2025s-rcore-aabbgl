@@ -14,7 +14,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+//use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
@@ -22,6 +22,11 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+
+use alloc::vec::Vec;
+const MAX_SYSCALL_NUM: usize = 500;
+
+
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -36,13 +41,13 @@ pub struct TaskManager {
     /// total number of tasks
     num_app: usize,
     /// use inner value to get mutable access
-    inner: UPSafeCell<TaskManagerInner>,
+    pub inner: UPSafeCell<TaskManagerInner>,
 }
 
 /// Inner of Task Manager
 pub struct TaskManagerInner {
     /// task list
-    tasks: [TaskControlBlock; MAX_APP_NUM],
+    tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
     current_task: usize,
 }
@@ -51,13 +56,13 @@ lazy_static! {
     /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
-        let mut tasks = [TaskControlBlock {
-            task_cx: TaskContext::zero_init(),
-            task_status: TaskStatus::UnInit,
-        }; MAX_APP_NUM];
-        for (i, task) in tasks.iter_mut().enumerate() {
-            task.task_cx = TaskContext::goto_restore(init_app_cx(i));
-            task.task_status = TaskStatus::Ready;
+        let mut tasks: Vec<TaskControlBlock> = Vec::with_capacity(num_app);
+        for i in 0..num_app {
+            tasks.push(TaskControlBlock {
+                task_cx: TaskContext::goto_restore(init_app_cx(i)),
+                task_status: TaskStatus::Ready,
+                syscall_counts: [0; MAX_SYSCALL_NUM],
+            });
         }
         TaskManager {
             num_app,
@@ -135,7 +140,26 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    /// Increment the syscall count for a given syscall number.
+    pub fn increment_syscall_count(&self, syscall_num: usize) {
+        let mut inner = self.inner.exclusive_access(); // 获取独占访问权
+        let current_task = inner.current_task; // 当前任务索引
+        inner.tasks[current_task].syscall_counts[syscall_num] += 1; // 更新系统调用计数
+    }
+
+    /// Get the syscall count for a given syscall number.
+    pub fn get_syscall_count(&self, syscall_num: usize) -> usize {
+        let inner = self.inner.exclusive_access(); // 获取独占访问权
+        let current_task = inner.current_task; // 当前任务索引
+        inner.tasks[current_task].syscall_counts[syscall_num] // 返回系统调用计数
+    }
+
+
+
 }
+    /// Get the syscall count for a given syscall number
+
+
 
 /// Run the first task in task list.
 pub fn run_first_task() {

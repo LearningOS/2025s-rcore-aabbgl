@@ -1,3 +1,4 @@
+
 //! SBI call wrappers
 
 use core::arch::asm;
@@ -5,7 +6,6 @@ use core::arch::asm;
 const SBI_SET_TIMER: usize = 0;
 const SBI_CONSOLE_PUTCHAR: usize = 1;
 const SBI_SHUTDOWN: usize = 8;
-
 /// general sbi call
 #[inline(always)]
 fn sbi_call(which: usize, arg0: usize, arg1: usize, arg2: usize) -> usize {

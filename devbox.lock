@@ -1,0 +1,65 @@
+{
+  "lockfile_version": "1",
+  "packages": {
+    "qemu@7.1.0": {
+      "last_modified": "2022-12-17T03:57:18Z",
+      "resolved": "github:NixOS/nixpkgs/067bfc6c90a301572cec7da48f09c447a9a8eae0#qemu",
+      "source": "devbox-search",
+      "version": "7.1.0",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/v03rpdwb2shjpsisszq1hybvb08dqdh3-qemu-7.1.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/v03rpdwb2shjpsisszq1hybvb08dqdh3-qemu-7.1.0"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/d2xpq6vfv1sq6fs2cz17q9gar9gcg67n-qemu-7.1.0",
+              "default": true
+            },
+            {
+              "name": "ga",
+              "path": "/nix/store/5v1hhf0gfwfl3ycrsbzbrdk1fs3ayfjz-qemu-7.1.0-ga"
+            }
+          ],
+          "store_path": "/nix/store/d2xpq6vfv1sq6fs2cz17q9gar9gcg67n-qemu-7.1.0"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/vcxfs1nq2isn97dy9hw9ci8zs4hnz2pp-qemu-7.1.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/vcxfs1nq2isn97dy9hw9ci8zs4hnz2pp-qemu-7.1.0"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/6hy4zqiglnpvn2q52s77lczb6k0sb645-qemu-7.1.0",
+              "default": true
+            },
+            {
+              "name": "debug",
+              "path": "/nix/store/p96ca6p77rmwpwybrxjayvvdvnmww876-qemu-7.1.0-debug"
+            },
+            {
+              "name": "ga",
+              "path": "/nix/store/5i7b71ijzbfs4wf47j3hbfkwv2kdyrav-qemu-7.1.0-ga"
+            }
+          ],
+          "store_path": "/nix/store/6hy4zqiglnpvn2q52s77lczb6k0sb645-qemu-7.1.0"
+        }
+      }
+    }
+  }
+}
