@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
-
+use crate::mm::MemorySet;
 pub use context::TaskContext;
 
 /// The task manager, where all the tasks are managed.
@@ -75,6 +75,8 @@ impl TaskManager {
     ///
     /// Generally, the first task in task list is an idle task (we call it zero process later).
     /// But in ch4, we load apps statically, so the first task is a real app.
+    // src/task/mod.rs
+
     fn run_first_task(&self) -> ! {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
@@ -152,6 +154,25 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+    ///increment the counts of syscall_id
+    pub fn increment_syscall_counts(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].syscall_counts[syscall_id] += 1;
+    }
+///get the counts
+    pub fn get_syscall_counts(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].syscall_counts[syscall_id]
+    }
+
+    /// Change the current 'Running' task's memory set
+    pub fn change_current_memory_set(&self, new_memory_set: MemorySet) {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].memory_set = new_memory_set;
     }
 }
 

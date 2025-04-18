@@ -4,7 +4,7 @@ use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPag
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
-
+use crate::config::{ PAGE_SIZE_BITS};
 bitflags! {
     /// page table entry flags
     pub struct PTEFlags: u8 {
@@ -179,3 +179,35 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
     }
     v
 }
+
+/// 将用户空间的只读指针翻译为引用
+pub fn translated_ref<T>(token: usize, ptr: *const T) -> Result<&'static T, isize> {
+    let page_table = PageTable::from_token(token);
+    let vpn = VirtAddr::from(ptr as usize).floor();
+    let pte = page_table.translate(vpn);
+
+    if pte.is_none() || !pte.unwrap().readable() {
+        return Err(-1); // 地址无效或不可读
+    }
+
+    let ppn = pte.unwrap().ppn();
+    let offset = VirtAddr::from(ptr as usize).page_offset();
+    Ok(unsafe { &*((ppn.0 << PAGE_SIZE_BITS | offset) as *const T) })
+}
+
+/// 将用户空间的可变指针翻译为可变引用
+pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> Result<&'static mut T, isize> {
+    let page_table = PageTable::from_token(token);
+    let vpn = VirtAddr::from(ptr as usize).floor();
+    let pte = page_table.translate(vpn);
+
+    if pte.is_none() || !pte.unwrap().writable() {
+        return Err(-1); // 地址无效或不可写
+    }
+
+    let ppn = pte.unwrap().ppn();
+    let offset = VirtAddr::from(ptr as usize).page_offset();
+    Ok(unsafe { &mut *((ppn.0 << PAGE_SIZE_BITS | offset) as *mut T) })
+}
+
+

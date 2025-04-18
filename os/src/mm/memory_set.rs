@@ -40,6 +40,49 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    /// Create a new `MemorySet` from a given token.
+    ///
+    /// This method initializes a new `MemorySet` using the provided token.
+    /// It assumes that the token corresponds to a valid page table.
+    pub fn from_token(token: usize) -> Self {
+        let page_table = PageTable::from_token(token);
+        Self {
+            page_table,
+            areas: Vec::new(),
+        }
+    }
+    /// Unmap a virtual page number from the memory set.
+    ///
+    /// # Arguments
+    ///
+    /// * `vpn` - The virtual page number to be unmapped.
+    ///
+    /// # Returns
+    ///
+    /// * `()` - This method does not return a value.
+    ///
+    /// # Panics
+    ///
+    /// * If the virtual page number is not mapped, this method will panic.
+    pub fn unmap(&mut self, vpn: VirtPageNum) {
+        for area in &mut self.areas {
+            if area.vpn_range.contains(&vpn) {
+                area.unmap_one(&mut self.page_table, vpn);
+                return;
+            }
+        }
+        warn!("Attempted to unmap an unmapped virtual page number: {:?}", vpn);
+    }
+
+    /// Allocate a new physical frame and return its physical page number.
+    ///
+    /// # Returns
+    ///
+    /// * `Option<PhysPageNum>` - Returns `Some(PhysPageNum)` if a frame is successfully allocated, otherwise `None`.
+    pub fn alloc_frame(&self) -> Option<PhysPageNum> {
+        frame_alloc().map(|frame| frame.ppn)
+    }
+
     /// Create a new empty `MemorySet`.
     pub fn new_bare() -> Self {
         Self {

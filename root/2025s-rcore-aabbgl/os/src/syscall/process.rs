@@ -1,91 +1,4 @@
-//! Process management syscalls
-use crate::task::{change_program_brk, exit_current_and_run_next, suspend_current_and_run_next,current_user_token, TASK_MANAGER};
-use crate::timer::get_time_us;
-use crate::mm::{MemorySet, MapPermission ,VirtAddr, translated_refmut,translated_ref};
-use crate::config::{PAGE_SIZE};
-#[repr(C)]
-#[derive(Debug)]
-pub struct TimeVal {
-    pub sec: usize,
-    pub usec: usize,
-}
 
-/// task exits and submit an exit code
-pub fn sys_exit(_exit_code: i32) -> ! {
-    trace!("kernel: sys_exit");
-    exit_current_and_run_next();
-    panic!("Unreachable in sys_exit!");
-}
-
-/// current task gives up resources for other tasks
-pub fn sys_yield() -> isize {
-    trace!("kernel: sys_yield");
-    suspend_current_and_run_next();
-    0
-}
-
-/// YOUR JOB: get time with second and microsecond
-/// HINT: You might reimplement it with virtual memory management.
-/// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!("kernel: sys_get_time");
-    if ts.is_null() {
-        return -1;
-    }
-    let time_val = translated_refmut::<TimeVal>(current_user_token(), ts);
-    if time_val.is_err() {
-        return -1;
-    }
-    let time_val = time_val.unwrap();
-    let us = get_time_us();
-    time_val.sec = us / 1_000_000;
-    time_val.usec = us % 1_000_000;
-    0
-}
-
-/// TODO: Finish sys_trace to pass testcases
-/// HINT: You might reimplement it with virtual memory management.
-pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
-    trace!("kernel: sys_trace");
-
-    match trace_request {
-        // Read a byte from user space
-        0 => {
-            let user_token = current_user_token();
-            let user_data = translated_ref::<u8>(user_token, id as *const u8);
-
-            if let Ok(data_ref) = user_data {
-                *data_ref as isize
-            } else {
-                -1 // Invalid or unreadable address
-            }
-        }
-
-        // Write a byte to user space
-        1 => {
-            let user_token = current_user_token();
-            let user_data = translated_refmut::<u8>(user_token, id as *mut u8);
-
-            if let Ok(data_ref) = user_data {
-                *data_ref = data as u8;
-                0 // Return success
-            } else {
-                -1 // Invalid or unwritable address
-            }
-        }
-
-        // Query syscall count
-        2 => TASK_MANAGER.get_syscall_counts(id) as isize,
-
-        // Invalid request
-        _ => -1,
-    }
-}
-
-
-
-
-// YOUR JOB: Implement mmap.
 pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
     trace!("kernel: sys_mmap");
 
@@ -156,7 +69,6 @@ pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
     0 // 返回成功
 }
 
-
 pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!("kernel: sys_munmap");
 
@@ -176,18 +88,18 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
     let start_vpn = VirtAddr::from(start).floor();
 
     // 检查目标虚存区间是否已经被映射
-    let mut any_mapped = false;
+    let mut all_unmapped = true;
     for i in 0..len_in_pages {
         let vpn = start_vpn + i;
         if memory_set.translate(vpn).is_some() {
-            any_mapped = true;
-            break; // 如果发现任何一页被映射，则退出循环
+            all_unmapped = false;
+            break;
         }
     }
 
-    // 如果没有任何页被映射，则直接返回错误
-    if !any_mapped {
-        return -1;
+    // 如果所有目标页都未被映射，则直接返回成功
+    if all_unmapped {
+        return 0;
     }
 
     // 解映射虚存页
@@ -204,13 +116,75 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
     0 // 返回成功
 }
 
+/// YOUR JOB: get time with second and microsecond
+/// HINT: You might reimplement it with virtual memory management.
+/// HINT: What if [`TimeVal`] is splitted by two pages ?
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    trace!("kernel: sys_get_time");
+    if ts.is_null() {
+        return -1;
+    }
+    let user_token = current_user_token();
+    let time_val = translated_refmut::<TimeVal>(user_token, ts);
 
-/// change data segment size
-pub fn sys_sbrk(size: i32) -> isize {
-    trace!("kernel: sys_sbrk");
-    if let Some(old_brk) = change_program_brk(size) {
-        old_brk as isize
-    } else {
-        -1
+    // 检查用户空间指针是否有效
+    if time_val.is_err() {
+        error!("Invalid user space pointer in sys_get_time");
+        return -1;
+    }
+
+    let time_val = time_val.unwrap();
+    let us = get_time_us();
+
+    // 确保时间单位转换逻辑正确
+    let sec = us / 1_000_000;
+    let usec = us % 1_000_000;
+
+    // 打印调试信息
+    debug!("sys_get_time: sec = {}, usec = {}", sec, usec);
+
+    // 写入用户空间
+    time_val.sec = sec;
+    time_val.usec = usec;
+
+    0
+}
+
+pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
+    trace!("kernel: sys_trace");
+
+    match trace_request {
+        // 读取用户空间的一个字节
+        0 => {
+            let user_token = current_user_token();
+            let user_data = translated_ref::<u8>(user_token, id as *const u8);
+
+            if user_data.is_err() {
+                return -1; // 地址无效或不可读
+            }
+
+            *user_data.unwrap() as isize
+        }
+
+        // 写入用户空间的一个字节
+        1 => {
+            let user_token = current_user_token();
+            let user_data = translated_refmut::<u8>(user_token, id as *mut u8);
+
+            if user_data.is_err() {
+                return -1; // 地址无效或不可写
+            }
+
+            *user_data.unwrap() = data as u8;
+            0 // 返回成功
+        }
+
+        // 查询系统调用次数
+        2 => {
+            TASK_MANAGER.get_syscall_counts(id) as isize
+        }
+
+        // 非法请求
+        _ => -1,
     }
 }

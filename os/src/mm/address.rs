@@ -2,6 +2,7 @@
 use super::PageTableEntry;
 use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
 use core::fmt::{self, Debug, Formatter};
+use core::ops::Add;
 /// physical address
 const PA_WIDTH_SV39: usize = 56;
 const VA_WIDTH_SV39: usize = 39;
@@ -227,6 +228,10 @@ where
     pub fn get_end(&self) -> T {
         self.r
     }
+    /// Check if the range contains the given value
+    pub fn contains(&self, value: &T) -> bool {
+        self.l <= *value && *value < self.r
+    }
 }
 impl<T> IntoIterator for SimpleRange<T>
 where
@@ -271,3 +276,12 @@ where
 }
 /// a simple range structure for virtual page number
 pub type VPNRange = SimpleRange<VirtPageNum>;
+
+
+impl Add<usize> for VirtPageNum {
+    type Output = VirtPageNum;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        VirtPageNum(self.0 + rhs)
+    }
+}
