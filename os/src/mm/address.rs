@@ -1,8 +1,10 @@
+// address.rs
 //! Implementation of physical and virtual address and page number.
 use super::PageTableEntry;
 use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
 use core::fmt::{self, Debug, Formatter};
 use core::ops::Add;
+
 /// physical address
 const PA_WIDTH_SV39: usize = 56;
 const VA_WIDTH_SV39: usize = 39;
@@ -170,7 +172,7 @@ impl VirtPageNum {
 }
 
 impl PhysAddr {
-    ///Get mutable reference to `PhysAddr` value
+    /// Get mutable reference to `PhysAddr` value
     /// Get the mutable reference of physical address
     pub fn get_mut<T>(&self) -> &'static mut T {
         unsafe { (self.0 as *mut T).as_mut().unwrap() }
@@ -205,7 +207,7 @@ impl StepByOne for VirtPageNum {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 /// a simple range structure for type T
 pub struct SimpleRange<T>
 where
@@ -276,7 +278,6 @@ where
 }
 /// a simple range structure for virtual page number
 pub type VPNRange = SimpleRange<VirtPageNum>;
-
 
 impl Add<usize> for VirtPageNum {
     type Output = VirtPageNum;

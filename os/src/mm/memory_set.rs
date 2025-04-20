@@ -1,17 +1,19 @@
 //! Implementation of [`MapArea`] and [`MemorySet`].
 
+
 use super::{frame_alloc, FrameTracker};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::{
-    KERNEL_STACK_SIZE, MEMORY_END, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT_BASE, USER_STACK_SIZE,
+     MEMORY_END, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT_BASE, USER_STACK_SIZE,
 };
 use crate::sync::UPSafeCell;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::arch::asm;
+use core::borrow:: BorrowMut;
 use lazy_static::*;
 use riscv::register::satp;
 
@@ -40,6 +42,11 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    #[allow(unused)]
+    ///get the page table
+    pub fn get_page_table(&mut self) -> &mut PageTable {
+        self.page_table.borrow_mut()
+    }
     /// Create a new `MemorySet` from a given token.
     ///
     /// This method initializes a new `MemorySet` using the provided token.
@@ -422,12 +429,7 @@ bitflags! {
     }
 }
 
-/// Return (bottom, top) of a kernel stack in kernel space.
-pub fn kernel_stack_position(app_id: usize) -> (usize, usize) {
-    let top = TRAMPOLINE - app_id * (KERNEL_STACK_SIZE + PAGE_SIZE);
-    let bottom = top - KERNEL_STACK_SIZE;
-    (bottom, top)
-}
+
 
 /// remap test in kernel space
 #[allow(unused)]

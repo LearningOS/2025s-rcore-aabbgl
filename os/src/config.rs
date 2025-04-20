@@ -23,3 +23,15 @@ pub const TRAP_CONTEXT_BASE: usize = TRAMPOLINE - PAGE_SIZE;
 pub const CLOCK_FREQ: usize = 12500000;
 /// the physical memory end
 pub const MEMORY_END: usize = 0x88000000;
+/// Maximum virtual address
+pub const MAXVA: usize = usize::MAX;
+/// Returns a tuple of (stack_bottom, stack_top)
+pub fn kernel_stack_position(app_id: usize) -> (usize, usize) {
+    let top = TRAMPOLINE - app_id * (KERNEL_STACK_SIZE + PAGE_SIZE);
+    let bottom = top - KERNEL_STACK_SIZE;
+    (bottom, top)
+}
+
+
+///MMIO 是一个内存映射 I/O 的范围
+pub const MMIO: [(usize, usize); 1] = [(0x10000000, 0x1000000)];

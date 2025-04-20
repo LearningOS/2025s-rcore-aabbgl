@@ -1,8 +1,10 @@
 //! Process management syscalls
-use crate::task::{change_program_brk, exit_current_and_run_next, suspend_current_and_run_next,current_user_token, TASK_MANAGER};
+use crate::task::{ unmap_consecutive_area, change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, current_user_token, TASK_MANAGER};
 use crate::timer::get_time_us;
-use crate::mm::{MemorySet, MapPermission ,VirtAddr, translated_refmut,translated_ref};
-use crate::config::{PAGE_SIZE};
+use crate::mm::{MapPermission, VirtAddr};
+use crate::mm::page_table::{translated_refmut, translated_ref};
+use crate::config::{PAGE_SIZE, MAXVA,MEMORY_END};
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct TimeVal {
@@ -49,161 +51,79 @@ pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
     trace!("kernel: sys_trace");
 
     match trace_request {
-        // Read a byte from user space
+        // 读取用户空间字节
         0 => {
+            // 检查地址是否超过最大合法地址
+            if id >= MEMORY_END{
+                return -1;
+            }
+
             let user_token = current_user_token();
             let user_data = translated_ref::<u8>(user_token, id as *const u8);
 
             if let Ok(data_ref) = user_data {
                 *data_ref as isize
             } else {
-                -1 // Invalid or unreadable address
+                -1 // 地址无效或不可读
             }
         }
 
-        // Write a byte to user space
+        // 写入用户空间字节
         1 => {
+            // 检查地址是否超过最大合法地址
+            if id >= MEMORY_END {
+                return -1;
+            }
+
             let user_token = current_user_token();
             let user_data = translated_refmut::<u8>(user_token, id as *mut u8);
 
             if let Ok(data_ref) = user_data {
                 *data_ref = data as u8;
-                0 // Return success
+                0 // 返回成功
             } else {
-                -1 // Invalid or unwritable address
+                -1 // 地址无效或不可写
             }
         }
 
-        // Query syscall count
+        // 查询系统调用次数（保持不变）
         2 => TASK_MANAGER.get_syscall_counts(id) as isize,
 
-        // Invalid request
+        // 无效请求
         _ => -1,
     }
 }
 
-
-
-
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
-    trace!("kernel: sys_mmap");
-
-    // 检查 start 是否按页对齐
-    if start % PAGE_SIZE != 0 {
+    if start % PAGE_SIZE != 0 /* start need to be page aligned */ ||
+        prot & !0x7 != 0 /* other bits of prot needs to be zero */ ||
+        prot & 0x7 == 0 /* No permission set, meaningless */ ||
+        start >= MAXVA /* mapping range should be an legal address */ {
         return -1;
     }
 
-    // 检查 prot 是否合法
-    if (prot & !0x7) != 0 || (prot & 0x7) == 0 {
-        return -1;
-    }
 
-    // 计算需要映射的页数（向上取整）
-    let len_in_pages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
-
-    // 获取当前任务的内存集
-    let token = current_user_token();
-    let mut memory_set = MemorySet::from_token(token);
-
-    // 转换起始虚拟地址为虚拟页号
+    // all ptes in range have passed the test
     let start_vpn = VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(start + len).ceil();
+    let perm = MapPermission::from_bits_truncate((prot << 1) as u8) | MapPermission::U;
 
-    // 检查目标虚存区间是否已经被映射
-    for i in 0..len_in_pages {
-        let vpn = start_vpn + i;
-        if memory_set.translate(vpn).is_some() {
-            warn!("Target virtual memory range is already mapped: {:?}", vpn);
-            return -1; // 目标地址已被映射，返回错误
-        }
-    }
-
-    // 根据 prot 设置页表项的权限
-    let flags = match prot {
-        1 => MapPermission::R,
-        2 => MapPermission::W,
-        3 => MapPermission::R | MapPermission::W,
-        4 => MapPermission::X,
-        5 => MapPermission::R | MapPermission::X,
-        6 => MapPermission::W | MapPermission::X,
-        7 => MapPermission::R | MapPermission::W | MapPermission::X,
-        _ => return -1, // 不可能到达这里，因为前面已经检查过 prot
-    };
-
-    // 映射虚存页到物理页
-    for i in 0..len_in_pages {
-        let vpn = start_vpn + i;
-        let ppn = memory_set.alloc_frame(); // 分配物理页
-
-        if ppn.is_none() {
-            error!("Failed to allocate physical frame for virtual page: {:?}", vpn);
-            return -1; // 物理内存不足
-        }
-
-        let start_vpn = VirtAddr::from(vpn);
-        let end_vpn = VirtAddr::from(vpn + 1);
-
-        memory_set.insert_framed_area(
-            start_vpn,
-            end_vpn,
-            flags | MapPermission::U,
-        );
-    }
-
-    // 更新当前任务的内存集
-    TASK_MANAGER.change_current_memory_set(memory_set);
-
-    0 // 返回成功
+    TASK_MANAGER.mmap_current_task(start_vpn, end_vpn, perm)
 }
 
-
+/// munmap the mapped virtual addresses
 pub fn sys_munmap(start: usize, len: usize) -> isize {
-    trace!("kernel: sys_munmap");
-
-    // 检查 start 是否按页对齐
-    if start % PAGE_SIZE != 0 {
+    if start >= MAXVA || start % PAGE_SIZE != 0 {
         return -1;
     }
-
-    // 计算需要解映射的页数（向上取整）
-    let len_in_pages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
-
-    // 获取当前任务的内存集
-    let token = current_user_token();
-    let mut memory_set = MemorySet::from_token(token);
-
-    // 转换起始虚拟地址为虚拟页号
-    let start_vpn = VirtAddr::from(start).floor();
-
-    // 检查目标虚存区间是否已经被映射
-    let mut any_mapped = false;
-    for i in 0..len_in_pages {
-        let vpn = start_vpn + i;
-        if memory_set.translate(vpn).is_some() {
-            any_mapped = true;
-            break; // 如果发现任何一页被映射，则退出循环
-        }
+    // avoid undefined situation
+    let mut mlen = len;
+    if start > MAXVA - len {
+        mlen = MAXVA - start;
     }
-
-    // 如果没有任何页被映射，则直接返回错误
-    if !any_mapped {
-        return -1;
-    }
-
-    // 解映射虚存页
-    for i in 0..len_in_pages {
-        let vpn = start_vpn + i;
-        if memory_set.translate(vpn).is_some() {
-            memory_set.unmap(vpn);
-        }
-    }
-
-    // 更新当前任务的内存集
-    TASK_MANAGER.change_current_memory_set(memory_set);
-
-    0 // 返回成功
+    unmap_consecutive_area(start, mlen)
 }
-
 
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

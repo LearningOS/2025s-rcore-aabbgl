@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
-use crate::mm::MemorySet;
+use crate::mm::{MemorySet, VirtAddr, MapPermission, VPNRange, VirtPageNum};
 pub use context::TaskContext;
 
 /// The task manager, where all the tasks are managed.
@@ -71,12 +71,40 @@ lazy_static! {
 }
 
 impl TaskManager {
+    /// 处理 mmap 的公共方法
+    pub fn mmap_current_task(&self, start_vpn: VirtPageNum, end_vpn: VirtPageNum, perm: MapPermission) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+
+        // 检查地址冲突
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            if let Some(pte) = memory_set.translate(vpn) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+        }
+
+        // 创建映射
+        memory_set.insert_framed_area(start_vpn.into(), end_vpn.into(), perm);
+        0
+    }
+
+    /// 安全访问内存集的方法
+    pub fn with_current_memory_set<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut MemorySet) -> R,
+    {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task; // 先获取值拷贝
+        f(&mut inner.tasks[current].memory_set) // 用拷贝值访问
+    }
+
     /// Run the first task in task list.
     ///
     /// Generally, the first task in task list is an idle task (we call it zero process later).
     /// But in ch4, we load apps statically, so the first task is a real app.
-    // src/task/mod.rs
-
     fn run_first_task(&self) -> ! {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
@@ -155,24 +183,43 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
-    ///increment the counts of syscall_id
+
+    /// Increment the counts of syscall_id
     pub fn increment_syscall_counts(&self, syscall_id: usize) {
         let mut inner = self.inner.exclusive_access();
         let cur = inner.current_task;
         inner.tasks[cur].syscall_counts[syscall_id] += 1;
     }
-///get the counts
+
+    /// Get the counts
     pub fn get_syscall_counts(&self, syscall_id: usize) -> usize {
         let inner = self.inner.exclusive_access();
         let cur = inner.current_task;
         inner.tasks[cur].syscall_counts[syscall_id]
     }
 
-    /// Change the current 'Running' task's memory set
-    pub fn change_current_memory_set(&self, new_memory_set: MemorySet) {
+
+    /// Check if a range of VPNs is already mapped in the current task's memory set
+    pub fn is_range_mapped(&self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> bool {
+        let inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        let memory_set = &inner.tasks[cur].memory_set;
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            if let Some(pte) = memory_set.translate(vpn) {
+                if pte.is_valid() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Map a new area in the current task's memory set
+    pub fn map_new_area(&self, start_vpn: VirtPageNum, end_vpn: VirtPageNum, perm: MapPermission) {
         let mut inner = self.inner.exclusive_access();
         let cur = inner.current_task;
-        inner.tasks[cur].memory_set = new_memory_set;
+        let memory_set = &mut inner.tasks[cur].memory_set;
+        memory_set.insert_framed_area(start_vpn.into(), end_vpn.into(), perm);
     }
 }
 
@@ -223,3 +270,25 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
 }
+
+/// Unmap consecutive area in the current task's memory set
+pub fn unmap_consecutive_area(start: usize, len: usize) -> isize {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    let start_vpn = VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(start + len).ceil();
+    let vpns = VPNRange::new(start_vpn, end_vpn);
+    for vpn in vpns {
+        if let Some(pte) = inner.tasks[current].memory_set.translate(vpn) {
+            if !pte.is_valid() {
+                return -1;
+            }
+            inner.tasks[current].memory_set.get_page_table().unmap(vpn);
+        } else {
+            // Also unmapped if no PTE found
+            return -1;
+        }
+    }
+    0
+}
+

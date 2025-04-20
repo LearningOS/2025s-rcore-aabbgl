@@ -145,7 +145,19 @@ impl PageTable {
     pub fn unmap(&mut self, vpn: VirtPageNum) {
         let pte = self.find_pte(vpn).unwrap();
         assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
+
+        // 获取物理页帧
+        let ppn = pte.ppn();
+
+        // 清空页表项
         *pte = PageTableEntry::empty();
+
+        // 释放物理页帧
+        if let Some(index) = self.frames.iter().position(|frame| frame.ppn == ppn) {
+            self.frames.remove(index);
+        } else {
+            warn!("Failed to find frame for ppn {:?}", ppn);
+        }
     }
     /// get the page table entry from the virtual page number
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
