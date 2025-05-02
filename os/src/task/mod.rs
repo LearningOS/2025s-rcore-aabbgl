@@ -21,20 +21,22 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::mm::{MapPermission, PageTableEntry, VirtAddr, VirtPageNum, VPNRange};
 use crate::loader::get_app_data_by_name;
 use alloc::sync::Arc;
 use lazy_static::*;
-pub use manager::{fetch_task, TaskManager};
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
 pub use id::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-pub use manager::add_task;
+pub use manager::{fetch_task, TaskManager,add_task};
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
     Processor,
 };
+
+
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
@@ -114,4 +116,49 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+///get page table
+pub fn get_current_task_page_table(vpn: VirtPageNum) -> Option<PageTableEntry> {
+    let task = current_task().unwrap();
+    let task_inner = task.inner_exclusive_access();
+    task_inner.memory_set.translate(vpn)
+}
+/// Create a new memory mapping area in current task's address space
+///
+/// # Arguments
+/// * `start_va` - Virtual start address (page aligned)
+/// * `end_va` - Virtual end address (page aligned)
+/// * `perm` - Memory protection flags combining MapPermission bits
+pub fn create_new_map_area(start_va: VirtAddr, end_va: VirtAddr, perm: MapPermission) {
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.memory_set.insert_framed_area(start_va, end_va, perm);
+}
+/// Unmap consecutive virtual memory pages in current task
+///
+/// # Arguments
+/// * `start` - Starting virtual address (must be page aligned)
+/// * `len` - Length in bytes to unmap (will be rounded up to page size)
+///
+/// # Returns
+/// 0 on success, -1 if any page was not mapped
+pub fn unmap_consecutive_area(start: usize, len: usize) -> isize {
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    let start_vpn = VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(start + len).ceil();
+    let vpns = VPNRange::new(start_vpn, end_vpn);
+    for vpn in vpns {
+        if let Some(pte) = task_inner.memory_set.translate(vpn) {
+            if !pte.is_valid() {
+                return -1;
+            }
+            task_inner.memory_set.get_page_table().unmap(vpn);
+        } else {
+            // Also unmapped if no PTE found
+            return -1;
+        }
+    }
+    0
 }

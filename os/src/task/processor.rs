@@ -12,6 +12,7 @@ use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
 
+pub const BIG_STRIDE: u64 = u64::MAX / 2;
 /// Processor management structure
 pub struct Processor {
     ///The task currently executing on the current processor
@@ -61,7 +62,10 @@ pub fn run_tasks() {
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
-            // release coming task_inner manually
+
+            let pass = BIG_STRIDE / task_inner.get_priority();
+            let task_stride = task_inner.get_stride();
+            task_inner.stride = task_stride.wrapping_add(pass);
             drop(task_inner);
             // release coming task TCB manually
             processor.current = Some(task);
@@ -70,11 +74,10 @@ pub fn run_tasks() {
             unsafe {
                 __switch(idle_task_cx_ptr, next_task_cx_ptr);
             }
-        } else {
-            warn!("no tasks available in run_tasks");
         }
     }
 }
+
 
 /// Get current task through take, leaving a None in its place
 pub fn take_current_task() -> Option<Arc<TaskControlBlock>> {

@@ -1,14 +1,20 @@
 //! Process management syscalls
 use alloc::sync::Arc;
-
-use crate::{
-    loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
-    task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
-    },
+use crate::task::{
+    TaskControlBlock,
+    exit_current_and_run_next,
+    suspend_current_and_run_next,
+    current_task,
+    current_user_token,
+    get_current_task_page_table,
+    create_new_map_area,
+    unmap_consecutive_area,
+    add_task,
 };
+use crate::loader::get_app_data_by_name;
+use crate::config::{ PAGE_SIZE,  MAXVA};
+use crate::timer::get_time_us;
+use crate::mm::{translated_byte_buffer, translated_str, translated_refmut,VirtAddr, MapPermission, VPNRange};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -105,30 +111,97 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    // 空指针检查
+    if ts.is_null() {
+        return -1;
+    }
+
+    // 获取当前用户态页表token
+    let token = current_user_token();
+    let time_val = TimeVal {
+        sec: get_time_us() / 1_000_000,
+        usec: get_time_us() % 1_000_000,
+    };
+
+    // 将TimeVal转换为字节序列
+    let src = unsafe {
+        core::slice::from_raw_parts(
+            &time_val as *const _ as *const u8,
+            core::mem::size_of::<TimeVal>()
+        )
+    };
+
+    // 获取用户空间缓冲区描述（自动处理跨页）
+    let dst_buffers = translated_byte_buffer(
+        token,
+        ts as *const u8,
+        core::mem::size_of::<TimeVal>()
     );
-    -1
+
+    // 检查缓冲区总长度是否足够
+    let total_len: usize = dst_buffers.iter().map(|b| b.len()).sum();
+    if total_len < src.len() {
+        return -1;
+    }
+
+    // 分段拷贝数据
+    let mut copied = 0;
+    for buffer in dst_buffers {
+        let len = buffer.len().min(src.len() - copied);
+        buffer[..len].copy_from_slice(&src[copied..copied + len]);
+        copied += len;
+        if copied >= src.len() {
+            break;
+        }
+    }
+
+    0
 }
+
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    if start % PAGE_SIZE != 0 /* start need to be page aligned */ ||
+        port & !0x7 != 0 /* other bits of port needs to be zero */ ||
+        port & 0x7 ==0 /* No permission set, meaningless */ ||
+        start >= MAXVA /* mapping range should be an legal address */ {
+        return -1;
+    }
+
+    // check the range [start, start + len)
+    let start_vpn = VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(start + len).ceil();
+    let vpns = VPNRange::new(start_vpn, end_vpn);
+    for vpn in vpns {
+        if let Some(pte) = get_current_task_page_table(vpn) {
+            // we find a pte that has been mapped
+            if pte.is_valid() {
+                return -1;
+            }
+        }
+    }
+    // all ptes in range has pass the test
+    create_new_map_area(
+        start_vpn.into(),
+        end_vpn.into(),
+        MapPermission::from_bits_truncate((port << 1) as u8) | MapPermission::U
     );
-    -1
+    0
 }
 
-/// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+
+/// munmap the mapped virtual addresses
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    if start >= MAXVA || start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    // avoid undefined situation
+    let mut mlen = len;
+    if start > MAXVA - len {
+        mlen = MAXVA - start;
+    }
+    unmap_consecutive_area(start, mlen)
 }
 
 /// change data segment size
@@ -143,19 +216,53 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_spawn(path: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+
+    // 获取当前任务和用户token
+    let current_task = current_task().unwrap();
+    let token = current_user_token();
+
+    // 解析用户空间传入的路径
+    let path = translated_str(token, path);
+
+    // 获取ELF文件数据
+    if let Some(data) = get_app_data_by_name(path.as_str()) {
+        // 使用Arc包装新创建的任务
+        let new_task = Arc::new(TaskControlBlock::new(data));
+        let new_pid = new_task.getpid();
+
+        // 设置父子进程关系时使用Arc的克隆
+        {
+            let mut parent_inner = current_task.inner_exclusive_access();
+            let mut child_inner = new_task.inner_exclusive_access();
+            child_inner.parent = Some(Arc::downgrade(&current_task));
+            parent_inner.children.push(Arc::clone(&new_task)); // 改为Arc克隆
+        }
+
+        // 加入调度队列
+        add_task(new_task.into());
+        new_pid as isize
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
+    // 参数校验：有效范围是 prio >= 2
+    if prio < 2 {
+        return -1;
+    }
+
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.priority = prio as u64;
+
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
+        "kernel:pid[{}] set priority to {}",
+        task.pid.0,
+        prio
     );
-    -1
+    prio // 成功时返回设置的优先级值
 }

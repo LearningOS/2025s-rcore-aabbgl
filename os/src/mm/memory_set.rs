@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use core::arch::asm;
 use lazy_static::*;
 use riscv::register::satp;
+use core::borrow::BorrowMut;
 
 extern "C" {
     fn stext();
@@ -37,6 +38,16 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    /// Create a new memory mapping area in current task's address space
+    ///
+    /// # Arguments
+    /// * `start_va` - Virtual start address (page aligned)
+    /// * `end_va` - Virtual end address (page aligned)
+    /// * `perm` - Memory protection flags combining MapPermission bits
+    #[allow(unused)]
+    pub fn get_page_table(&mut self) -> &mut PageTable {
+        self.page_table.borrow_mut()
+    }
     /// Create a new empty `MemorySet`.
     pub fn new_bare() -> Self {
         Self {

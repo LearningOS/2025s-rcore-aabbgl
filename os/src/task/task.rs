@@ -8,7 +8,8 @@ use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
-
+use core::cmp::Ordering;
+use crate::task::processor::BIG_STRIDE;
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -68,6 +69,10 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    /// stride
+    pub stride: u64,
+    /// priority
+    pub priority: u64,
 }
 
 impl TaskControlBlockInner {
@@ -84,6 +89,23 @@ impl TaskControlBlockInner {
     }
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
+    }
+
+    /// 获取当前步幅值
+    pub fn get_stride(&self) -> u64 {
+        self.stride
+    }
+    pub fn get_priority(&self) -> u64 {
+        if self.priority < 2 { // 最低优先级保护
+            2
+        } else {
+            self.priority
+        }
+    }
+    /// 增加步幅值（根据优先级计算）
+    pub fn update_stride(&mut self) {
+        let big_stride: u64 = BIG_STRIDE; // 确保BIG_STRIDE是u64类型
+        self.stride = self.stride.wrapping_add(big_stride / self.priority);
     }
 }
 
@@ -118,6 +140,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    stride: 0,
+                    priority: 16,
                 })
             },
         };
@@ -191,6 +215,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    stride: parent_inner.stride,
+                    priority: parent_inner.priority,
                 })
             },
         });
@@ -237,6 +263,50 @@ impl TaskControlBlock {
         }
     }
 }
+
+
+/// 实现基于步幅调度算法(Stride Scheduling)的比较逻辑
+/// 用于优先队列调度，支持溢出安全计算
+impl Ord for TaskControlBlock {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // 一次性获取两个任务的 inner 数据，减少锁竞争
+        let (self_inner, other_inner) = (
+            self.inner_exclusive_access(),
+            other.inner_exclusive_access()
+        );
+
+        // 将 stride 转换为 i64 并计算差值（利用有符号溢出特性）
+        let diff = other_inner.stride as i64 - self_inner.stride as i64;
+
+        if diff < 0 {
+            // other_stride < self_stride → other 更小，应优先调度 self
+            Ordering::Greater
+        } else if diff > 0 {
+            // other_stride > self_stride → other 更大，应优先调度 other
+            Ordering::Less
+        } else {
+            // diff == 0 → 相等（理论上不会触发，因为 PartialEq 已确保不相等）
+            Ordering::Equal
+        }
+    }
+}
+
+impl PartialOrd for TaskControlBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for TaskControlBlock {}
+
+impl PartialEq for TaskControlBlock {
+    fn eq(&self, _other: &Self) -> bool {
+        // 假设两个 Stride 永远不会相等（根据题目要求）
+        false
+    }
+}
+
+
 
 #[derive(Copy, Clone, PartialEq)]
 /// task status: UnInit, Ready, Running, Exited
